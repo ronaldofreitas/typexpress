@@ -1,10 +1,12 @@
+import { InternalError } from '../util/errors/internal-error';
 import { AxiosStatic } from "axios";
+import config, { IConfig } from 'config';
 
 export interface StormGlassPointsSource {
     [key: string]: number;
 }
 
-export interface StormGlassPoints {
+export interface StormGlassPoint {
     readonly swellDirection: StormGlassPointsSource;
     readonly swellHeight: StormGlassPointsSource;
     readonly swellPeriod: StormGlassPointsSource;
@@ -16,7 +18,7 @@ export interface StormGlassPoints {
 }
 
 export interface StormGlassForecastResponse {
-    hours: StormGlassPoints[];
+    hours: StormGlassPoint[];
 }
 
 export interface ForecastPoints {
@@ -30,18 +32,50 @@ export interface ForecastPoints {
     windSpeed: number;
 }
 
+export class ClientRequestError extends InternalError {
+    constructor(message: string) {
+        const InternalMessage = 'Unexpected error when trying to comunicate to StormGlass';
+        super(`${InternalMessage} : ${message}`);
+    }
+}
+
+export class StormGlassResponseError extends InternalError {
+    constructor(message: string) {
+        const InternalMessage = 'Unexpected error returned by the StormGlass service';
+        super(`${InternalMessage} : ${message}`);
+    }
+}
+
+const stormglassResourceConfig: IConfig = config.get('App.resources.StormGlass');
+
 export class StormGlass {
-    
+
     readonly stormGlassAPIParams = 'swellDirection,swellHeight,swellPeriod,waveDirection,waveHeight,windDirection,windSpeed';
     readonly stormGlassAPISource = 'noaa';
 
     constructor(protected request: AxiosStatic) {}
 
     public async fetchPoints(lat: number, lng: number): Promise<ForecastPoints[]> {
-        const response = await this.request.get<StormGlassForecastResponse>(`
-            https://api.stormglass.io/v2/weather/point?params=${this.stormGlassAPIParams}&source=${this.stormGlassAPISource}&end=1592113802&lat=${lat}&lng=${lng}
-        `);
-        return this.normalizeResponse(response.data);
+        try {
+            const response = await this.request.get<StormGlassForecastResponse>(
+                `${stormglassResourceConfig.get(
+                    'apiUrl'
+                )}/weather/point?lat=${lat}&lng=${lng}&params=${
+                    this.stormGlassAPIParams
+                }&source=${this.stormGlassAPISource}&end=${endTimestamp}`,
+                {
+                    headers: {
+                        Authorization: stormglassResourceConfig.get('apiToken'),
+                    },
+                }
+            );
+            return this.normalizeResponse(response.data);
+        } catch (error) {
+            if (error.response && error.response.status) {
+                throw new StormGlassResponseError(`Error: ${JSON.stringify(error.response.data)} Code: ${error.response.status}`);
+            }
+            throw new ClientRequestError(error.message);
+        }
     }
 
     private normalizeResponse(points: StormGlassForecastResponse): ForecastPoints[] {
